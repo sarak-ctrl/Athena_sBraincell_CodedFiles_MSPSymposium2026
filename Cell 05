@@ -1,0 +1,33 @@
+import time, pickle
+import numpy as np
+import matplotlib.pyplot as plt
+
+print("Building digital twin library...")
+X_lib, y_lib = build_digital_twin_library(n_virtual_patients=30, n_samples_per_patient=20)
+gp = fit_prior_gp(X_lib, y_lib)
+print("Library built:", X_lib.shape)
+
+n_trials = 15
+test_severities = [0.3, 0.6, 0.85]
+n_repeats = 6
+
+results = {}
+for sev in test_severities:
+    naive_curves = [naive_search_trials(sev, n_trials, seed=100+r) for r in range(n_repeats)]
+    bo_curves = [meta_bo_trials(sev, n_trials, seed=200+r, gp_prior=gp, X_lib=X_lib, y_lib=y_lib) for r in range(n_repeats)]
+    results[sev] = (np.mean(naive_curves, axis=0), np.mean(bo_curves, axis=0))
+    print(f"severity {sev}: naive final={results[sev][0][-1]:.3f}, bo final={results[sev][1][-1]:.3f}")
+
+trials = np.arange(1, n_trials+1)
+fig, axes = plt.subplots(1, 3, figsize=(13,4), sharey=True)
+titles = ['Mild injury (0.3)', 'Moderate injury (0.6)', 'Severe injury (0.85)']
+for ax, sev, title in zip(axes, test_severities, titles):
+    naive, bo = results[sev]
+    ax.plot(trials, naive, 'o-', color='gray', label='Naive search')
+    ax.plot(trials, bo, 's-', color='green', label='Digital-twin BO (yours)')
+    ax.set_title(title); ax.set_xlabel('Real patient trials'); ax.grid(alpha=0.3)
+axes[0].set_ylabel('Best gait-quality score')
+axes[0].legend()
+plt.tight_layout()
+plt.savefig('learning_curves.png', dpi=150)
+plt.show()
