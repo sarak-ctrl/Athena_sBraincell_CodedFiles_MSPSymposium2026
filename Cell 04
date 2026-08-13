@@ -1,0 +1,11 @@
+t, f_emg, e_emg = simulate_circuit(freq_hz=60, amp_ma=8, pw_ms=0.6, injury_severity=0.5, seed=1)
+
+print("t range:", t.min(), t.max())
+print("flexor_emg: min=", f_emg.min(), "max=", f_emg.max(), "mean=", f_emg.mean())
+print("extensor_emg: min=", e_emg.min(), "max=", e_emg.max(), "mean=", e_emg.mean())
+
+score = gait_quality_score(t, f_emg, e_emg)
+print("score:", score)
+
+single_eval = evaluate_params(60, 8, 0.6, injury_severity=0.5, seed=1)
+print("evaluate_params result:", single_eval)
