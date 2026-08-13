@@ -1,0 +1,84 @@
+import numpy as np
+
+DT = 0.001
+
+def _recruitment(amp_ma, pw_ms):
+  charge = amp_ma * (pw_ms / 0.5)
+  return 1.0 / (1.0 + np.exp(-(charge - 4.0)))
+
+def _frequency_effect(freq_hz):
+  return np.tanh(freq_hz / 30.0)
+
+def simulate_circuit(freq_hz, amp_ma, pw_ms, injury_severity, duration_s=8.0, seed=0):
+  rng = np.random.default_rng(seed)
+  n_steps = int(duration_s / DT)
+  t = np.arange(n_steps) * DT
+
+  ees_effect = _recruitment(amp_ma, pw_ms) * _frequency_effect(freq_hz)
+  descending_effect = 0.9 * (1.0 - injury_severity)
+  u = ees_effect + descending_effect
+
+  tau_x = 0.10
+  tau_v = 0.50
+  b = 2.5
+  w = 2.0
+
+  x1 = np.zeros(n_steps); x2 = np.zeros(n_steps)
+  v1 = np.zeros(n_steps); v2 = np.zeros(n_steps)
+  noise = rng.normal(0, 0.02, size=(n_steps, 2))
+
+  for i in range(1, n_steps):
+    y1 = max(x1[i - 1], 0.0)
+    y2 = max(x2[i - 1], 0.0)
+
+    dx1 = (-x1[i - 1] - w * y2 - b * v1[i - 1] + u + noise[i, 0]) / tau_x
+    dx2 = (-x2[i - 1] - w * y1 - b * v2[i - 1] + u + noise[i, 1]) / tau_x
+    dv1 = (-v1[i - 1] + y1) / tau_v
+    dv2 = (-v2[i - 1] + y2) / tau_v
+
+    x1[i] = x1[i - 1] + DT * dx1
+    x2[i] = x2[i - 1] + DT * dx2
+    v1[i] = v1[i - 1] + DT * dv1
+    v2[i] = v2[i - 1] + DT * dv2
+
+  flexor_rate = np.maximum(x1, 0.0)
+  extensor_rate = np.maximum(x2, 0.0)
+
+  twitch_tau = 0.04
+  kernel_t = np.arange(0, 0.3, DT)
+  kernel = kernel_t / twitch_tau * np.exp(-kernel_t / twitch_tau)
+  kernel /= kernel.sum()
+  flexor_emg = np.convolve(flexor_rate, kernel, mode='same')
+  extensor_emg = np.convolve(extensor_rate, kernel, mode='same')
+
+  return t, flexor_emg, extensor_emg
+
+def gait_quality_score(t, flexor_emg, extensor_emg, settle_s=2.0):
+  mask = t > settle_s
+  f = flexor_emg[mask]
+  e = extensor_emg[mask]
+
+  if np.std(f) < 1e-6 or np.std(e) < 1e-6:
+    alternation = 0.0
+  else:
+    corr = np.corrcoef(f, e)[0, 1]
+    alternation = np.clip(-corr, 0, 1)
+
+  amp = np.clip((np.mean(f) + np.mean(e)) / 2 / 0.6, 0, 1)
+
+  sig = f - f.mean()
+  if np.std(sig) < 1e-6:
+    rhythmicity = 0.0
+  else:
+    freqs = np.fft.rfftfreq(len(sig), DT)
+    power = np.abs(np.fft.rfft(sig)) ** 2
+    total_power = power.sum() + 1e-9
+    band = (freqs >= 0.3) & (freqs <= 2.0)
+    rhythmicity = power[band].sum() / total_power
+
+  score = 0.45 * alternation + 0.30 * amp + 0.25 * rhythmicity
+  return float(np.clip(score, 0, 1))
+
+def evaluate_params(freq_hz, amp_ma, pw_ms, injury_severity, seed=0):
+  t, f_emg, e_emg = simulate_circuit(freq_hz, amp_ma, pw_ms, injury_severity, seed=seed)
+  return gait_quality_score(t, f_emg, e_emg)
