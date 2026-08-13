@@ -1,0 +1,25 @@
+import matplotlib.pyplot as plt
+
+t, f_bad, e_bad = simulate_circuit(freq_hz=10, amp_ma=1, pw_ms=0.2, injury_severity=0.7, seed=3)
+t, f_good, e_good = simulate_circuit(freq_hz=60, amp_ma=8, pw_ms=0.6, injury_severity=0.7, seed=3)
+
+mask = (t > 2) & (t < 8)
+
+fig, axes = plt.subplots(2, 1, figsize=(8,6), sharex=True)
+
+axes[0].plot(t[mask], f_bad[mask], label='Flexor pool', color='#d62728')
+axes[0].plot(t[mask], e_bad[mask], label='Extensor pool', color='#1f77b4')
+axes[0].set_title('Poorly-tuned stimulation (10 Hz, 1 mA, 0.2 ms)')
+axes[0].set_ylabel('Simulated EMG (a.u.)')
+axes[0].legend(loc='upper right')
+
+axes[1].plot(t[mask], f_good[mask], label='Flexor pool', color='#d62728')
+axes[1].plot(t[mask], e_good[mask], label='Extensor pool', color='#1f77b4')
+axes[1].set_title('Well-tuned stimulation (60 Hz, 8 mA, 0.6 ms)')
+axes[1].set_xlabel('Time (s)')
+axes[1].set_ylabel('Simulated EMG (a.u.)')
+axes[1].legend(loc='upper right')
+
+plt.tight_layout()
+plt.savefig('emg_traces.png', dpi=150)
+plt.show()
