@@ -1,0 +1,6 @@
+for sev in test_severities:
+    naive, bo = results[sev]
+    target = naive[-1]
+    naive_needed = int(np.argmax(naive >= 0.995*target) + 1)
+    bo_needed = int(np.argmax(bo >= 0.995*target) + 1)
+    print(f"severity {sev}: naive needs {naive_needed} trials, BO needs {bo_needed} trials for equivalent performance")
