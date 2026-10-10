@@ -1,0 +1,15 @@
+for sev in test_severities:
+    print("naive", sev, np.round(naive_trial1[sev], 6).tolist())
+for sigma in noise_levels:
+    for sev in test_severities:
+        print("dt", sigma, sev, np.round(bo_trial1[(sigma, sev)], 6).tolist())
+clips = []
+for sigma in [0.05, 0.15, 0.25]:
+    for sev in test_severities:
+        for r in range(6):
+            raw = sev + np.random.default_rng(noise_seed_base + r).normal(0, sigma)
+            if raw < 0.2 or raw > 0.95:
+                clips.append((sigma, sev, r, round(float(raw), 4)))
+print(len(clips), "of 54 clipped")
+for c in clips:
+    print(c)
