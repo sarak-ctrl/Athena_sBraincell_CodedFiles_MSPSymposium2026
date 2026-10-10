@@ -1,0 +1,2 @@
+for sev in test_severities:
+    print(sev, np.round(bo_trial1[(0.0, sev)] - naive_trial1[sev], 6))
