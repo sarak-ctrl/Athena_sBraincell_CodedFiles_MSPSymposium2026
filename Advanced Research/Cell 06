@@ -1,0 +1,2 @@
+import sys, numpy, scipy, sklearn
+print(sys.version.split()[0], numpy.__version__, scipy.__version__, sklearn.__version__)
