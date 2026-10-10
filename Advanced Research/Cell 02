@@ -1,0 +1,180 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.gaussian_process import GaussianProcessRegressor
+from sklearn.gaussian_process.kernels import Matern, WhiteKernel, ConstantKernel
+
+DT = 0.001
+
+def _recruitment(amp_ma, pw_ms):
+    charge = amp_ma * (pw_ms / 0.5)
+    return 1.0 / (1.0 + np.exp(-(charge - 4.0)))
+
+def _frequency_effect(freq_hz):
+    return np.tanh(freq_hz / 30.0)
+
+def simulate_circuit(freq_hz, amp_ma, pw_ms, injury_severity, duration_s=8.0, seed=0):
+    rng = np.random.default_rng(seed)
+    n_steps = int(duration_s / DT)
+    t = np.arange(n_steps) * DT
+    ees_effect = _recruitment(amp_ma, pw_ms) * _frequency_effect(freq_hz)
+    descending_effect = 0.9 * (1.0 - injury_severity)
+    u = ees_effect + descending_effect
+    tau_x = 0.10
+    tau_v = 0.50
+    b = 2.5
+    w = 2.0
+    x1 = np.zeros(n_steps); x2 = np.zeros(n_steps)
+    v1 = np.zeros(n_steps); v2 = np.zeros(n_steps)
+    noise = rng.normal(0, 0.02, size=(n_steps, 2))
+    for i in range(1, n_steps):
+        y1 = max(x1[i-1], 0.0)
+        y2 = max(x2[i-1], 0.0)
+        dx1 = (-x1[i-1] - w*y2 - b*v1[i-1] + u + noise[i, 0]) / tau_x
+        dx2 = (-x2[i-1] - w*y1 - b*v2[i-1] + u + noise[i, 1]) / tau_x
+        dv1 = (-v1[i-1] + y1) / tau_v
+        dv2 = (-v2[i-1] + y2) / tau_v
+        x1[i] = x1[i-1] + DT*dx1
+        x2[i] = x2[i-1] + DT*dx2
+        v1[i] = v1[i-1] + DT*dv1
+        v2[i] = v2[i-1] + DT*dv2
+    flexor_rate = np.maximum(x1, 0.0)
+    extensor_rate = np.maximum(x2, 0.0)
+    twitch_tau = 0.04
+    kernel_t = np.arange(0, 0.3, DT)
+    kernel = kernel_t / twitch_tau * np.exp(-kernel_t / twitch_tau)
+    kernel /= kernel.sum()
+    flexor_emg = np.convolve(flexor_rate, kernel, mode='same')
+    extensor_emg = np.convolve(extensor_rate, kernel, mode='same')
+    return t, flexor_emg, extensor_emg
+
+def gait_quality_score(t, flexor_emg, extensor_emg, settle_s=2.0):
+    mask = t > settle_s
+    f = flexor_emg[mask]
+    e = extensor_emg[mask]
+    if np.std(f) < 1e-6 or np.std(e) < 1e-6:
+        alternation = 0.0
+    else:
+        corr = np.corrcoef(f, e)[0, 1]
+        alternation = np.clip(-corr, 0, 1)
+    amp = np.clip((np.mean(f) + np.mean(e)) / 2 / 0.6, 0, 1)
+    sig = f - f.mean()
+    if np.std(sig) < 1e-6:
+        rhythmicity = 0.0
+    else:
+        freqs = np.fft.rfftfreq(len(sig), DT)
+        power = np.abs(np.fft.rfft(sig)) ** 2
+        total_power = power.sum() + 1e-9
+        band = (freqs >= 0.3) & (freqs <= 2.0)
+        rhythmicity = power[band].sum() / total_power
+    score = 0.45 * alternation + 0.30 * amp + 0.25 * rhythmicity
+    return float(np.clip(score, 0, 1))
+
+def evaluate_params(freq_hz, amp_ma, pw_ms, injury_severity, seed=0):
+    t, f_emg, e_emg = simulate_circuit(freq_hz, amp_ma, pw_ms, injury_severity, seed=seed)
+    return gait_quality_score(t, f_emg, e_emg)
+
+PARAM_BOUNDS = {"freq_hz": (5, 100), "amp_ma": (0, 10), "pw_ms": (0.1, 1.0)}
+PARAM_NAMES = list(PARAM_BOUNDS.keys())
+
+def random_params(rng):
+    return np.array([rng.uniform(*PARAM_BOUNDS[p]) for p in PARAM_NAMES])
+
+def build_digital_twin_library(n_virtual_patients=30, n_samples_per_patient=20, seed=1):
+    rng = np.random.default_rng(seed)
+    X, y = [], []
+    severities = rng.uniform(0.2, 0.95, n_virtual_patients)
+    for sev in severities:
+        for _ in range(n_samples_per_patient):
+            params = random_params(rng)
+            score = evaluate_params(*params, injury_severity=sev, seed=rng.integers(1e6))
+            X.append([sev, *params])
+            y.append(score)
+    return np.array(X), np.array(y)
+
+def fit_prior_gp(X_lib, y_lib):
+    kernel = ConstantKernel(1.0) * Matern(length_scale=np.ones(X_lib.shape[1]), nu=2.5) \
+             + WhiteKernel(noise_level=0.01)
+    gp = GaussianProcessRegressor(kernel=kernel, normalize_y=True, n_restarts_optimizer=2, random_state=0)
+    gp.fit(X_lib, y_lib)
+    return gp
+
+def naive_search_trials(injury_severity, n_trials, seed):
+    rng = np.random.default_rng(seed)
+    best = 0.0
+    best_so_far = []
+    for _ in range(n_trials):
+        params = random_params(rng)
+        score = evaluate_params(*params, injury_severity=injury_severity, seed=rng.integers(1e6))
+        best = max(best, score)
+        best_so_far.append(best)
+    return np.array(best_so_far)
+
+def meta_bo_trials(injury_severity, n_trials, seed, gp_prior, X_lib, y_lib, n_candidates=300):
+    rng = np.random.default_rng(seed)
+    kernel_fixed = gp_prior.kernel_
+    patient_X, patient_y = [], []
+    best = 0.0
+    best_so_far = []
+    candidates = np.array([random_params(rng) for _ in range(n_candidates)])
+    cand_full = np.hstack([np.full((len(candidates), 1), injury_severity), candidates])
+    for _ in range(n_trials):
+        if len(patient_y) == 0:
+            mu, sigma = gp_prior.predict(cand_full, return_std=True)
+        else:
+            X_aug = np.vstack([X_lib, np.hstack([np.full((len(patient_X), 1), injury_severity),
+                                                   np.array(patient_X)])])
+            y_aug = np.concatenate([y_lib, np.array(patient_y)])
+            gp_fast = GaussianProcessRegressor(kernel=kernel_fixed, optimizer=None,
+                                                normalize_y=True, alpha=1e-6)
+            gp_fast.fit(X_aug, y_aug)
+            mu, sigma = gp_fast.predict(cand_full, return_std=True)
+        ucb = mu + 1.5 * sigma
+        next_params = candidates[np.argmax(ucb)]
+        score = evaluate_params(*next_params, injury_severity=injury_severity, seed=rng.integers(1e6))
+        patient_X.append(next_params)
+        patient_y.append(score)
+        best = max(best, score)
+        best_so_far.append(best)
+    return np.array(best_so_far)
+
+print("Building digital twin library...")
+X_lib, y_lib = build_digital_twin_library(n_virtual_patients=30, n_samples_per_patient=20)
+gp = fit_prior_gp(X_lib, y_lib)
+
+n_trials = 15
+test_severities = [0.3, 0.6, 0.85]
+n_repeats = 6
+
+results = {}
+for sev in test_severities:
+    naive_curves = [naive_search_trials(sev, n_trials, seed=100+r) for r in range(n_repeats)]
+    bo_curves = [meta_bo_trials(sev, n_trials, seed=200+r, gp_prior=gp, X_lib=X_lib, y_lib=y_lib)
+                 for r in range(n_repeats)]
+    naive_mean = np.mean(naive_curves, axis=0)
+    bo_mean = np.mean(bo_curves, axis=0)
+    naive_std = np.std(naive_curves, axis=0)
+    bo_std = np.std(bo_curves, axis=0)
+    results[sev] = (naive_mean, bo_mean, naive_std, bo_std)
+    print(f"severity {sev}: naive_final={naive_mean[-1]:.3f} bo_final={bo_mean[-1]:.3f}")
+
+trials = np.arange(1, n_trials + 1)
+fig, axes = plt.subplots(3, 1, figsize=(3.3, 6.4), dpi=200)
+titles = ['Mild injury (severity 0.3)', 'Moderate injury (severity 0.6)', 'Severe injury (severity 0.85)']
+
+for ax, sev, title in zip(axes, test_severities, titles):
+    naive_mean, bo_mean, naive_std, bo_std = results[sev]
+    ax.plot(trials, naive_mean, 'o-', color='gray', label='Naive search', markersize=4, linewidth=1.2)
+    ax.plot(trials, bo_mean, 's-', color='green', label='Digital-twin BO', markersize=4, linewidth=1.2)
+    ax.fill_between(trials, naive_mean - naive_std, naive_mean + naive_std, color='gray', alpha=0.2)
+    ax.fill_between(trials, bo_mean - bo_std, bo_mean + bo_std, color='green', alpha=0.2)
+    ax.set_title(title, fontsize=9)
+    ax.set_xlabel('Real patient trials', fontsize=8)
+    ax.set_ylabel('Best gait-quality score', fontsize=8)
+    ax.tick_params(labelsize=7)
+    ax.grid(alpha=0.3)
+
+axes[0].legend(fontsize=7, loc='lower right')
+plt.tight_layout()
+plt.savefig('figure2_learning_curves.png', dpi=200, bbox_inches='tight')
+plt.show()
+print("Saved figure2_learning_curves.png")
