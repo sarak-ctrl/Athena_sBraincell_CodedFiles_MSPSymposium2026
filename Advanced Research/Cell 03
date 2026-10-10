@@ -1,0 +1,52 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy import stats
+from matplotlib.patches import Patch
+
+subjects = ['y1', 'y2', 'y3', 'y4', 'y5', 'o1', 'o2', 'o3', 'o4', 'o5']
+ages = [23, 29, 23, 21, 26, 76, 74, 75, 77, 71]
+freqs = np.array([0.8699, 0.9600, 0.9704, 0.8447, 0.8960,
+                   0.9704, 0.8566, 1.0629, 1.0451, 0.9595])
+
+mean_real = freqs.mean()
+sd_real = freqs.std(ddof=1)
+sem = stats.sem(freqs)
+ci = stats.t.interval(0.95, len(freqs) - 1, loc=mean_real, scale=sem)
+
+model_freq = 0.8335
+t_stat, p_val = stats.ttest_1samp(freqs, model_freq)
+
+print("Subject\tAge\tStride Freq (Hz)")
+for s, a, f in zip(subjects, ages, freqs):
+    print(f"{s}\t{a}\t{f:.3f}")
+print(f"Mean ± SD: {mean_real:.3f} ± {sd_real:.3f}")
+print(f"Model: {model_freq:.3f}")
+print(f"95% CI: ({ci[0]:.3f}, {ci[1]:.3f})")
+print(f"t={t_stat:.2f}, p={p_val:.4f}")
+print(f"Percent difference: {100*abs(model_freq-mean_real)/mean_real:.1f}%")
+
+fig, ax = plt.subplots(figsize=(3.3, 2.6), dpi=200)
+x = np.arange(len(subjects))
+colors = ['#4c72b0'] * 5 + ['#dd8452'] * 5
+
+ax.bar(x, freqs, color=colors, width=0.65)
+ax.axhline(mean_real, color='black', linestyle='--', linewidth=1)
+ax.axhline(model_freq, color='#d62728', linestyle='-', linewidth=1.5)
+ax.set_xticks(x)
+ax.set_xticklabels(subjects, fontsize=7)
+ax.set_ylabel('Stride frequency (Hz)', fontsize=7)
+ax.tick_params(labelsize=7)
+ax.set_ylim(0, 1.2)
+
+handles = [
+    Patch(color='#4c72b0', label='Younger (21-29)'),
+    Patch(color='#dd8452', label='Older (71-77)'),
+    plt.Line2D([0], [0], color='black', linestyle='--', label=f'Real mean ({mean_real:.3f} Hz)'),
+    plt.Line2D([0], [0], color='#d62728', linewidth=1.5, label=f'Model ({model_freq:.3f} Hz)'),
+]
+ax.legend(handles=handles, fontsize=5.5, loc='lower right')
+
+plt.tight_layout()
+plt.savefig('figure3_stride_frequency.png', dpi=200, bbox_inches='tight')
+plt.show()
+print("Saved figure3_stride_frequency.png")
